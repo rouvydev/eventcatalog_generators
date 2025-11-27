@@ -1,6 +1,6 @@
 {
-  "name": "@eventcatalog/generator-asyncapi",
-  "version": "5.1.4",
+  "name": "@rouvydev/generator-asyncapi",
+  "version": "5.2.0",
   "description": "AsyncAPI generator for EventCatalog",
   "scripts": {
     "build": "tsup",
@@ -11,7 +11,7 @@
     "release": "changeset publish"
   },
   "publishConfig": {
-    "access": "public"
+    "registry": "https://npm.pkg.github.com/"
   },
   "keywords": [],
   "author": "",
@@ -52,7 +52,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/event-catalog/generators",
+    "url": "https://github.com/rouvydev/eventcatalog_generators",
     "directory": "packages/generator-asyncapi"
   }
 }
