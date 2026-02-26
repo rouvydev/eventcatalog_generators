@@ -115,6 +115,7 @@ const optionsSchema = z.object({
         .optional(),
     })
     .optional(),
+  messageOwnership: z.enum(['action-based', 'all-owned']).optional(),
   debug: z.boolean().optional(),
   parseSchemas: z.boolean().optional(),
   parseChannels: z.boolean().optional(),
@@ -214,7 +215,7 @@ export default async (config: any, options: Props) => {
   // Should the file that is written to the catalog be parsed (https://github.com/asyncapi/parser-js) or as it is?
   validateOptions(options);
 
-  const { services, saveParsedSpecFile = false, parseSchemas = true, parseChannels = false } = options;
+  const { services, saveParsedSpecFile = false, parseSchemas = true, parseChannels = false, messageOwnership = 'action-based' } = options;
   // const asyncAPIFiles = Array.isArray(options.path) ? options.path : [options.path];
   console.log(chalk.green(`Processing ${services.length} AsyncAPI files...`));
   for (const service of services) {
@@ -394,7 +395,7 @@ export default async (config: any, options: Props) => {
           isDomainMarkedAsDraft || isServiceMarkedAsDraft || message.extensions().get('x-eventcatalog-draft')?.value() || null;
 
         // does this service own or just consume the message?
-        const serviceOwnsMessageContract = isServiceMessageOwner(message, operation);
+        const serviceOwnsMessageContract = isServiceMessageOwner(message, operation, messageOwnership);
         const isReceived = operation.action() === 'receive' || operation.action() === 'subscribe';
         const isSent = operation.action() === 'send' || operation.action() === 'publish';
 
@@ -648,18 +649,25 @@ const getRawSpecFile = async (service: Service) => {
  *
  * default is provider (AsyncAPI file / service owns the message)
  */
-const isServiceMessageOwner = (message: MessageInterface, operation?: { extensions: () => any; action?: () => string }): boolean => {
+const isServiceMessageOwner = (
+  message: MessageInterface,
+  operation?: { extensions: () => any; action?: () => string },
+  messageOwnership: string = 'action-based'
+): boolean => {
   // Prefer operation-level override to support shared/ref'ed messages where ownership
   // needs to be set per operation/service.
   const operationRole = operation?.extensions?.().get?.('x-eventcatalog-role')?.value?.();
   const messageRole = message.extensions().get('x-eventcatalog-role')?.value();
 
-  // If explicitly set, use that value
+  // x-eventcatalog-role always takes priority
   if (operationRole || messageRole) {
     return (operationRole || messageRole) === 'provider';
   }
 
-  // Default: only senders/publishers own messages
+  // Config-driven default: all messages treated as owned
+  if (messageOwnership === 'all-owned') return true;
+
+  // action-based default: only senders/publishers own messages
   const action = operation?.action?.();
   if (action === 'receive' || action === 'subscribe') {
     return false;
