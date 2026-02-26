@@ -2229,6 +2229,34 @@ describe('AsyncAPI EventCatalog Plugin', () => {
           const subscriberService = await getService('notification-service', '1.0.0');
           expect(subscriberService.receives).toEqual([{ id: 'OrderPlaced', version: '1.0.0' }]);
         });
+
+        it('non-owner subscriber does not create a duplicate message at its own service path', async () => {
+          const { getService } = utils(catalogDir);
+
+          // Publisher creates the message first
+          await plugin(config, {
+            services: [{ path: join(asyncAPIExamplesDir, 'publisher-service.asyncapi.yml'), id: 'order-service' }],
+          });
+
+          // Subscriber references the same message
+          await plugin(config, {
+            services: [{ path: join(asyncAPIExamplesDir, 'subscriber-service.asyncapi.yml'), id: 'notification-service' }],
+          });
+
+          // Message should exist at the publisher's path
+          expect(existsSync(join(catalogDir, 'services', 'order-service', 'events', 'OrderPlaced'))).toBe(true);
+
+          // Message should NOT exist at the subscriber's path (no duplicate)
+          expect(existsSync(join(catalogDir, 'services', 'notification-service', 'events', 'OrderPlaced'))).toBe(false);
+
+          // Subscriber service should still list the message in receives
+          const subscriberService = await getService('notification-service', '1.0.0');
+          expect(subscriberService.receives).toEqual([{ id: 'OrderPlaced', version: '1.0.0' }]);
+
+          // Publisher service should still list the message in sends
+          const publisherService = await getService('order-service', '1.0.0');
+          expect(publisherService.sends).toEqual([{ id: 'OrderPlaced', version: '1.0.0' }]);
+        });
       });
 
       describe('all-owned', () => {

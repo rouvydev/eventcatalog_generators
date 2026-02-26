@@ -454,6 +454,15 @@ export default async (config: any, options: Props) => {
               console.log(chalk.cyan(` - Versioned previous message: (v${catalogedMessage.version})`));
             }
           }
+        } else {
+          // Non-owner: if the message already exists, skip writing to avoid duplicates
+          const catalogedMessage = await getMessage(messageId, 'latest');
+          if (catalogedMessage) {
+            if (isSent) sends.push({ id: messageId, version: messageVersion });
+            if (isReceived) receives.push({ id: messageId, version: messageVersion });
+            console.log(chalk.cyan(` - Message ${messageId} (v${messageVersion}) already exists, skipping (non-owner)`));
+            continue;
+          }
         }
 
         const channelsForMessage = parseChannels ? getChannelsForMessage(message, channels, document) : [];
