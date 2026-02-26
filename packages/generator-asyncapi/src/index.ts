@@ -530,10 +530,11 @@ export default async (config: any, options: Props) => {
           messagePath = messageId;
         }
 
+        let shouldWriteMessage = true;
+
         if (serviceOwnsMessageContract) {
           // Check if the message already exists in the catalog
           const catalogedMessage = await getMessage(messageId, 'latest');
-          let shouldWriteMessage = true;
 
           if (catalogedMessage) {
             // persist markdown, badges and attachments if it exists
@@ -561,73 +562,74 @@ export default async (config: any, options: Props) => {
               shouldWriteMessage = false;
             }
           }
+        }
 
-          if (shouldWriteMessage) {
-            await writeMessage(
-              {
-                id: messageId,
-                version: messageVersion,
-                name: getMessageName(message),
-                summary: getMessageSummary(message),
-                markdown: messageMarkdown,
-                badges:
-                  messageBadges || badges.map((badge) => ({ content: badge.name(), textColor: 'blue', backgroundColor: 'blue' })),
-                ...(messageHasSchema(message) && { schemaPath: getSchemaFileName(message) }),
-                ...(owners && { owners }),
-                ...(messageAttachments && { attachments: messageAttachments }),
-                ...(deprecatedDate && {
-                  deprecated: { date: deprecatedDate, ...(deprecatedMessage && { message: deprecatedMessage }) },
-                }),
-                ...(isMessageMarkedAsDraft && { draft: true }),
-              },
-              {
-                override: true,
-                path: messagePath,
-              }
-            );
-
-            console.log(chalk.cyan(` - Message (v${messageVersion}) created`));
-
-            // Check if the message has a payload, if it does then document in EventCatalog
-            if (messageHasSchema(message)) {
-              const schema = getSchemaForMessage(message, attachHeadersToSchema);
-
-              // Normalize path separators and remove leading relative path segments (../ or ./ for both Unix and Windows)
-              const cleanedMessagePath = messagePath
-                .replace(/\\/g, '/') // Convert all backslashes to forward slashes
-                .replace(/^(\.\.\/|\.\/)+/g, ''); // Remove all leading ../ or ./ segments
-
-              await addSchemaToMessage(
-                messageId,
-                {
-                  fileName: getSchemaFileName(message),
-                  schema: safeStringify(schema, 4),
-                },
-                messageVersion,
-                { path: cleanedMessagePath }
-              );
-              console.log(chalk.cyan(` - Schema added to message (v${messageVersion})`));
+        if (shouldWriteMessage) {
+          await writeMessage(
+            {
+              id: messageId,
+              version: messageVersion,
+              name: getMessageName(message),
+              summary: getMessageSummary(message),
+              markdown: messageMarkdown,
+              badges:
+                messageBadges || badges.map((badge) => ({ content: badge.name(), textColor: 'blue', backgroundColor: 'blue' })),
+              ...(messageHasSchema(message) && { schemaPath: getSchemaFileName(message) }),
+              ...(owners && { owners }),
+              ...(messageAttachments && { attachments: messageAttachments }),
+              ...(deprecatedDate && {
+                deprecated: { date: deprecatedDate, ...(deprecatedMessage && { message: deprecatedMessage }) },
+              }),
+              ...(isMessageMarkedAsDraft && { draft: true }),
+            },
+            {
+              override: serviceOwnsMessageContract,
+              path: messagePath,
             }
+          );
 
-            // Add examples to the message if parseExamples is enabled
-            if (parseExamples) {
-              const messageExamples = message.examples().all();
-              for (let i = 0; i < messageExamples.length; i++) {
-                const example = messageExamples[i];
-                const payload = example.payload();
-                if (payload) {
-                  const fileName = example.hasName() ? `${example.name()}.json` : `example-${i}.json`;
-                  await addExampleToMessage(messageId, { content: JSON.stringify(payload, null, 2), fileName }, messageVersion);
-                }
+          console.log(
+            chalk.cyan(
+              ` - Message (v${messageVersion}) ${serviceOwnsMessageContract ? 'created' : 'written (non-owner, override: false)'}`
+            )
+          );
+
+          // Check if the message has a payload, if it does then document in EventCatalog
+          if (messageHasSchema(message)) {
+            const schema = getSchemaForMessage(message, attachHeadersToSchema);
+
+            // Normalize path separators and remove leading relative path segments (../ or ./ for both Unix and Windows)
+            const cleanedMessagePath = messagePath
+              .replace(/\\/g, '/') // Convert all backslashes to forward slashes
+              .replace(/^(\.\.\/|\.\/)+/g, ''); // Remove all leading ../ or ./ segments
+
+            await addSchemaToMessage(
+              messageId,
+              {
+                fileName: getSchemaFileName(message),
+                schema: safeStringify(schema, 4),
+              },
+              messageVersion,
+              { path: cleanedMessagePath }
+            );
+            console.log(chalk.cyan(` - Schema added to message (v${messageVersion})`));
+          }
+
+          // Add examples to the message if parseExamples is enabled
+          if (parseExamples) {
+            const messageExamples = message.examples().all();
+            for (let i = 0; i < messageExamples.length; i++) {
+              const example = messageExamples[i];
+              const payload = example.payload();
+              if (payload) {
+                const fileName = example.hasName() ? `${example.name()}.json` : `example-${i}.json`;
+                await addExampleToMessage(messageId, { content: JSON.stringify(payload, null, 2), fileName }, messageVersion);
               }
-              if (messageExamples.length > 0) {
-                console.log(chalk.cyan(` - ${messageExamples.length} example(s) added to message (v${messageVersion})`));
-              }
+            }
+            if (messageExamples.length > 0) {
+              console.log(chalk.cyan(` - ${messageExamples.length} example(s) added to message (v${messageVersion})`));
             }
           }
-        } else {
-          // Message is not owned by this service, therefore we don't need to document it
-          console.log(chalk.yellow(` - Skipping external message: ${getMessageName(message)}(v${messageVersion})`));
         }
         // Derive group from x-eventcatalog-group extension if groupMessagesBy is configured
         const group =
@@ -843,11 +845,21 @@ const isJSONSchemaMessage = (message: MessageInterface) => {
  *
  * default is provider (AsyncAPI file / service owns the message)
  */
-const isServiceMessageOwner = (message: MessageInterface, operation?: { extensions: () => any }): boolean => {
+const isServiceMessageOwner = (message: MessageInterface, operation?: { extensions: () => any; action?: () => string }): boolean => {
   // Prefer operation-level override to support shared/ref'ed messages where ownership
   // needs to be set per operation/service.
   const operationRole = operation?.extensions?.().get?.('x-eventcatalog-role')?.value?.();
   const messageRole = message.extensions().get('x-eventcatalog-role')?.value();
-  const value = operationRole || messageRole || 'provider';
-  return value === 'provider';
+
+  // If explicitly set, use that value
+  if (operationRole || messageRole) {
+    return (operationRole || messageRole) === 'provider';
+  }
+
+  // Default: only senders/publishers own messages
+  const action = operation?.action?.();
+  if (action === 'receive' || action === 'subscribe') {
+    return false;
+  }
+  return true;
 };
