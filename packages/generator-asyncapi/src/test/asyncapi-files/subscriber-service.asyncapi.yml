@@ -1,0 +1,32 @@
+asyncapi: 3.0.0
+info:
+  title: Notification Service
+  version: 1.0.0
+  description: Service that subscribes to order events for notifications
+channels:
+  orderPlaced:
+    address: orders/placed
+    messages:
+      OrderPlaced:
+        $ref: '#/components/messages/OrderPlaced'
+operations:
+  receiveOrderPlaced:
+    action: receive
+    channel:
+      $ref: '#/channels/orderPlaced'
+    messages:
+      - $ref: '#/channels/orderPlaced/messages/OrderPlaced'
+components:
+  messages:
+    OrderPlaced:
+      description: 'An order has been placed (subscriber view)'
+      x-eventcatalog-message-type: event
+      payload:
+        type: object
+        properties:
+          orderId:
+            type: string
+            description: Unique order identifier
+          userId:
+            type: string
+            description: ID of the user who placed the order

@@ -1168,7 +1168,7 @@ describe('AsyncAPI EventCatalog Plugin', () => {
       expect(newEvent.markdown).toEqual('please dont override me!');
     });
 
-    it('when the `x-eventcatalog-role` is defined and set to `client` the generator does not create or modify the message documentation, but still included in the service (sends/receives)', async () => {
+    it('when the `x-eventcatalog-role` is defined and set to `client` the message is written with override: false but still included in the service (sends/receives)', async () => {
       const { getEvent } = utils(catalogDir);
       const { getService } = utils(catalogDir);
 
@@ -1177,8 +1177,9 @@ describe('AsyncAPI EventCatalog Plugin', () => {
       const service = await getService('account-service', '1.0.0');
       const newEvent = await getEvent('UserSubscribed', 'latest');
 
-      // Event was not added to the EventCatalog
-      expect(newEvent).toBeUndefined();
+      // Event is created (with override: false) even though this service is a client
+      expect(newEvent).toBeDefined();
+      expect(newEvent.name).toEqual('UserSubscribed');
 
       expect(service.receives).toEqual([
         { id: 'SignUpUser', version: '2.0.0' },
@@ -1189,7 +1190,7 @@ describe('AsyncAPI EventCatalog Plugin', () => {
       ]);
     });
 
-    it('when `x-eventcatalog-role` is defined on an operation and set to `client`, the message is treated as external', async () => {
+    it('when `x-eventcatalog-role` is defined on an operation and set to `client`, the message is written with override: false', async () => {
       const { getEvent } = utils(catalogDir);
       const { getService } = utils(catalogDir);
 
@@ -1200,7 +1201,9 @@ describe('AsyncAPI EventCatalog Plugin', () => {
       const service = await getService('account-service', '1.0.0');
       const event = await getEvent('UserSignedUp', 'latest');
 
-      expect(event).toBeUndefined();
+      // Event is created (with override: false) even though this service is a client
+      expect(event).toBeDefined();
+      expect(event.name).toEqual('UserSignedUp');
       expect(service.receives).toContainEqual({ id: 'UserSignedUp', version: '1.0.0' });
     });
 
@@ -2025,7 +2028,7 @@ describe('AsyncAPI EventCatalog Plugin', () => {
         expect(service.schemaPath).toEqual('simple.asyncapi.yml');
 
         const events = await fs.readdir(join(catalogDir, 'events'));
-        expect(events).toEqual(['UserSignedOut', 'UserSignedUp']);
+        expect(events).toEqual(['UserSignedOut', 'UserSignedUp', 'UserSubscribed']);
 
         const queries = await fs.readdir(join(catalogDir, 'queries'));
         expect(queries).toEqual(['CheckEmailAvailability', 'GetUserByEmail']);
@@ -2200,6 +2203,90 @@ describe('AsyncAPI EventCatalog Plugin', () => {
             ],
           })
         );
+      });
+    });
+
+    describe('default message ownership', () => {
+      it('when publisher and subscriber both define the same message, subscriber does not override publisher schema', async () => {
+        const { getEvent, getService } = utils(catalogDir);
+
+        // Run publisher first — creates OrderPlaced with full schema
+        await plugin(config, {
+          services: [{ path: join(asyncAPIExamplesDir, 'publisher-service.asyncapi.yml'), id: 'order-service' }],
+        });
+
+        // Run subscriber second — should NOT overwrite the message
+        await plugin(config, {
+          services: [{ path: join(asyncAPIExamplesDir, 'subscriber-service.asyncapi.yml'), id: 'notification-service' }],
+        });
+
+        // The event should still have the publisher's full schema
+        const event = await getEvent('OrderPlaced', 'latest');
+        expect(event).toBeDefined();
+
+        // Read the schema file and verify it has all publisher fields
+        const schema = JSON.parse(
+          await fs.readFile(join(catalogDir, 'services', 'order-service', 'events', 'OrderPlaced', 'schema.json'), 'utf-8')
+        );
+        expect(schema.properties).toHaveProperty('orderId');
+        expect(schema.properties).toHaveProperty('userId');
+        expect(schema.properties).toHaveProperty('amount');
+        expect(schema.properties).toHaveProperty('currency');
+        expect(schema.properties).toHaveProperty('items');
+
+        // The subscriber service should still receive the message
+        const subscriberService = await getService('notification-service', '1.0.0');
+        expect(subscriberService.receives).toEqual([{ id: 'OrderPlaced', version: '1.0.0' }]);
+      });
+
+      it('when a receive operation has explicit x-eventcatalog-role: provider, it still owns the message', async () => {
+        const { getEvent } = utils(catalogDir);
+
+        // publisher-service sends OrderPlaced, subscriber-service receives it
+        // but we add explicit provider role to subscriber's operation
+        // Create a temporary fixture with explicit provider role on receive
+        const subscriberWithProviderRole = join(catalogDir, 'subscriber-provider.asyncapi.yml');
+        await fs.mkdir(catalogDir, { recursive: true });
+        await fs.writeFile(
+          subscriberWithProviderRole,
+          `asyncapi: 3.0.0
+info:
+  title: Subscriber Provider Service
+  version: 1.0.0
+channels:
+  orderPlaced:
+    address: orders/placed
+    messages:
+      OrderPlaced:
+        $ref: '#/components/messages/OrderPlaced'
+operations:
+  receiveOrderPlaced:
+    action: receive
+    x-eventcatalog-role: provider
+    channel:
+      $ref: '#/channels/orderPlaced'
+    messages:
+      - $ref: '#/channels/orderPlaced/messages/OrderPlaced'
+components:
+  messages:
+    OrderPlaced:
+      description: 'An order has been placed (provider subscriber)'
+      x-eventcatalog-message-type: event
+      payload:
+        type: object
+        properties:
+          orderId:
+            type: string
+`
+        );
+
+        await plugin(config, {
+          services: [{ path: subscriberWithProviderRole, id: 'subscriber-provider-service' }],
+        });
+
+        const event = await getEvent('OrderPlaced', 'latest');
+        expect(event).toBeDefined();
+        expect(event.schemaPath).toEqual('schema.json');
       });
     });
   });

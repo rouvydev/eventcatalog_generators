@@ -453,65 +453,62 @@ export default async (config: any, options: Props) => {
               console.log(chalk.cyan(` - Versioned previous message: (v${catalogedMessage.version})`));
             }
           }
+        }
 
-          const channelsForMessage = parseChannels ? getChannelsForMessage(message, channels, document) : [];
+        const channelsForMessage = parseChannels ? getChannelsForMessage(message, channels, document) : [];
 
-          await writeMessage(
-            {
-              id: messageId,
-              version: messageVersion,
-              name: getMessageName(message),
-              summary: getMessageSummary(message),
-              markdown: messageMarkdown,
-              badges:
-                messageBadges || badges.map((badge) => ({ content: badge.name(), textColor: 'blue', backgroundColor: 'blue' })),
-              ...(messageHasSchema(message) && { schemaPath: getSchemaFileName(message) }),
-              ...(owners && { owners }),
-              ...(messageAttachments && { attachments: messageAttachments }),
-              ...(channelsForMessage.length > 0 && { channels: channelsForMessage }),
-              ...(deprecatedDate && {
-                deprecated: { date: deprecatedDate, ...(deprecatedMessage && { message: deprecatedMessage }) },
-              }),
-              ...(isMessageMarkedAsDraft && { draft: true }),
-            },
-            {
-              override: true,
-              path: messagePath,
-            }
-          );
-
-          console.log(chalk.cyan(` - Message (v${messageVersion}) created`));
-
-          // Check if the message has a payload, if it does then document in EventCatalog
-          if (messageHasSchema(message)) {
-            // Get the schema from the original payload if it exists
-            let schema = message.payload()?.extensions()?.get('x-parser-original-payload')?.json() || message.payload()?.json();
-
-            // Sometimes the payload comes back with the schema nested in the payload
-            // if thats the case, we need to extract the schema from the payload (e.g async-file-with-schema-format.yml in tests folder)
-            if (schema?.schema) {
-              schema = schema.schema;
-            }
-
-            // Normalize path separators and remove leading relative path segments (../ or ./ for both Unix and Windows)
-            const cleanedMessagePath = messagePath
-              .replace(/\\/g, '/') // Convert all backslashes to forward slashes
-              .replace(/^(\.\.\/|\.\/)+/g, ''); // Remove all leading ../ or ./ segments
-
-            await addSchemaToMessage(
-              messageId,
-              {
-                fileName: getSchemaFileName(message),
-                schema: JSON.stringify(schema, null, 4),
-              },
-              messageVersion,
-              { path: cleanedMessagePath }
-            );
-            console.log(chalk.cyan(` - Schema added to message (v${messageVersion})`));
+        await writeMessage(
+          {
+            id: messageId,
+            version: messageVersion,
+            name: getMessageName(message),
+            summary: getMessageSummary(message),
+            markdown: messageMarkdown,
+            badges:
+              messageBadges || badges.map((badge) => ({ content: badge.name(), textColor: 'blue', backgroundColor: 'blue' })),
+            ...(messageHasSchema(message) && { schemaPath: getSchemaFileName(message) }),
+            ...(owners && { owners }),
+            ...(messageAttachments && { attachments: messageAttachments }),
+            ...(channelsForMessage.length > 0 && { channels: channelsForMessage }),
+            ...(deprecatedDate && {
+              deprecated: { date: deprecatedDate, ...(deprecatedMessage && { message: deprecatedMessage }) },
+            }),
+            ...(isMessageMarkedAsDraft && { draft: true }),
+          },
+          {
+            override: serviceOwnsMessageContract,
+            path: messagePath,
           }
-        } else {
-          // Message is not owned by this service, therefore we don't need to document it
-          console.log(chalk.yellow(` - Skipping external message: ${getMessageName(message)}(v${messageVersion})`));
+        );
+
+        console.log(chalk.cyan(` - Message (v${messageVersion}) ${serviceOwnsMessageContract ? 'created' : 'written (non-owner, override: false)'}`));
+
+        // Check if the message has a payload, if it does then document in EventCatalog
+        if (messageHasSchema(message)) {
+          // Get the schema from the original payload if it exists
+          let schema = message.payload()?.extensions()?.get('x-parser-original-payload')?.json() || message.payload()?.json();
+
+          // Sometimes the payload comes back with the schema nested in the payload
+          // if thats the case, we need to extract the schema from the payload (e.g async-file-with-schema-format.yml in tests folder)
+          if (schema?.schema) {
+            schema = schema.schema;
+          }
+
+          // Normalize path separators and remove leading relative path segments (../ or ./ for both Unix and Windows)
+          const cleanedMessagePath = messagePath
+            .replace(/\\/g, '/') // Convert all backslashes to forward slashes
+            .replace(/^(\.\.\/|\.\/)+/g, ''); // Remove all leading ../ or ./ segments
+
+          await addSchemaToMessage(
+            messageId,
+            {
+              fileName: getSchemaFileName(message),
+              schema: JSON.stringify(schema, null, 4),
+            },
+            messageVersion,
+            { path: cleanedMessagePath }
+          );
+          console.log(chalk.cyan(` - Schema added to message (v${messageVersion})`));
         }
         // Add the message to the correct array
         if (isSent) sends.push({ id: messageId, version: messageVersion });
@@ -651,11 +648,21 @@ const getRawSpecFile = async (service: Service) => {
  *
  * default is provider (AsyncAPI file / service owns the message)
  */
-const isServiceMessageOwner = (message: MessageInterface, operation?: { extensions: () => any }): boolean => {
+const isServiceMessageOwner = (message: MessageInterface, operation?: { extensions: () => any; action?: () => string }): boolean => {
   // Prefer operation-level override to support shared/ref'ed messages where ownership
   // needs to be set per operation/service.
   const operationRole = operation?.extensions?.().get?.('x-eventcatalog-role')?.value?.();
   const messageRole = message.extensions().get('x-eventcatalog-role')?.value();
-  const value = operationRole || messageRole || 'provider';
-  return value === 'provider';
+
+  // If explicitly set, use that value
+  if (operationRole || messageRole) {
+    return (operationRole || messageRole) === 'provider';
+  }
+
+  // Default: only senders/publishers own messages
+  const action = operation?.action?.();
+  if (action === 'receive' || action === 'subscribe') {
+    return false;
+  }
+  return true;
 };
