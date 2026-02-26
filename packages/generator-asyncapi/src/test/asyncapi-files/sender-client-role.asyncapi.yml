@@ -1,0 +1,28 @@
+asyncapi: 3.0.0
+info:
+  title: Sender Client Role Service
+  version: 1.0.0
+channels:
+  orderPlaced:
+    address: orders/placed
+    messages:
+      OrderPlaced:
+        $ref: '#/components/messages/OrderPlaced'
+operations:
+  sendOrderPlaced:
+    action: send
+    x-eventcatalog-role: client
+    channel:
+      $ref: '#/channels/orderPlaced'
+    messages:
+      - $ref: '#/channels/orderPlaced/messages/OrderPlaced'
+components:
+  messages:
+    OrderPlaced:
+      description: 'An order has been placed (client sender)'
+      x-eventcatalog-message-type: event
+      payload:
+        type: object
+        properties:
+          orderId:
+            type: string
