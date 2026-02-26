@@ -564,6 +564,13 @@ export default async (config: any, options: Props) => {
               shouldWriteMessage = false;
             }
           }
+        } else {
+          // Non-owner: if the message already exists, skip writing to avoid duplicates
+          const catalogedMessage = await getMessage(messageId, 'latest');
+          if (catalogedMessage) {
+            console.log(chalk.cyan(` - Message ${messageId} (v${messageVersion}) already exists, skipping (non-owner)`));
+            shouldWriteMessage = false;
+          }
         }
 
         if (shouldWriteMessage) {
